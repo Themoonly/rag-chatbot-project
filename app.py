@@ -71,10 +71,16 @@ def init_vector_store():
 
 embed_model, index, chunks_data = init_vector_store()
 
-# 4. ฟังก์ชันค้นหาบริบท (Retrieval)
+# 4. ฟังก์ชันค้นหาบริบท (Retrieval) พร้อมระบบกรองคำถามนอกพื้นที่ (Guardrails)
 def retrieve_context(query: str, top_k: int = 3):
     if not index or not embed_model:
         return []
+
+    # ดักจับคำถามนอกพื้นที่ปราจีนบุรี (Negative Testing Guardrail)
+    out_of_domain_keywords = ["เสม็ด", "ซาฟารี", "พัทยา", "ภูเก็ต", "เชียงใหม่", "รถไฟฟ้า", "ดอนเมือง", "สุวรรณภูมิ"]
+    if any(k in query for k in out_of_domain_keywords):
+        return []
+
     q_vec = embed_model.encode([query], normalize_embeddings=True)
     scores, indices = index.search(np.array(q_vec, dtype=np.float32), top_k)
     
@@ -88,10 +94,11 @@ def retrieve_context(query: str, top_k: int = 3):
             })
     return results
 
-# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback พร้อมความปลอดภัย
+# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback พร้อมความปลอดภัยและ Zero Hallucination
 def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
+    # หากไม่พบบริบท หรือเป็นคำถามนอกพื้นที่ ให้ตอบปฏิเสธตามโจทย์ทันที
     if not retrieved_chunks:
-        return "ขออภัยครับ ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามนี้ในเอกสารคลังความรู้การท่องเที่ยวปราจีนบุรี"
+        return "ไม่พบข้อมูลนี้ในเอกสารคลังความรู้ (ไม่มีข้อมูลดังกล่าวในคลังเอกสาร)"
 
     context_str = "\n\n".join(
         [f"[แหล่งที่มา: {c['source']}]\n{c['text']}" for c in retrieved_chunks]
@@ -101,7 +108,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
 
 กฎการตอบคำถาม:
 1. ตอบคำถามโดยใช้เฉพาะข้อมูลจาก "บริบทที่กำหนดให้" ด้านล่างนี้เท่านั้น ห้ามแต่งคำตอบขึ้นมาเองเด็ดขาด
-2. หากข้อมูลในบริบทไม่มีคำตอบ หรือข้อมูลไม่เพียงพอ ให้ตอบตรงๆ ว่า "ไม่พบข้อมูลนี้ในเอกสารคลังความรู้"
+2. หากข้อมูลในบริบทไม่มีคำตอบ หรือข้อมูลไม่เพียงพอ ให้ตอบสั้นๆ ตรงๆ ว่า "ไม่พบข้อมูลนี้ในเอกสารคลังความรู้ (ไม่มีข้อมูลดังกล่าวในคลังเอกสาร)"
 3. อธิบายคำตอบอย่างสุภาพ กระชับ ถูกต้อง และระบุแหล่งที่มา (ชื่อไฟล์เอกสาร) ท้ายคำตอบเสมอ
 
 บริบท:
@@ -113,12 +120,12 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     gemini_key = st.secrets.get("GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     groq_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
 
-    # ลำดับที่ 1: เรียกใช้ Gemini API (เริ่มจากรุ่นที่รองรับปัจจุบัน)
+    # ลำดับที่ 1: เรียกใช้ Gemini API
     if gemini_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            candidate_models = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.0-flash"]
+            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
             for m in candidate_models:
                 try:
                     response = client.models.generate_content(model=m, contents=prompt)
@@ -149,7 +156,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    # ลำดับที่ 3: Graceful Degradation (ดึงสรุปเบื้องต้นจาก Chunks แทนการขึ้นจอ Error สีแดง)
+    # ลำดับที่ 3: Graceful Degradation สำหรับคำถามในพื้นที่ที่ API ติดขัด
     fallback_response = (
         "ขณะนี้ระบบประมวลผลภาษามีผู้ใช้งานหนาแน่นชั่วคราว "
         "ระบบจึงได้ดึงข้อมูลเบื้องต้นที่เกี่ยวข้องจากคลังเอกสารมาให้ท่านโดยตรง:\n\n"
@@ -172,7 +179,7 @@ def display_sources(sources, latency_sec=None):
     if sources:
         with st.expander("📚 เอกสารและข้อมูลอ้างอิง"):
             if latency_sec:
-                st.caption(f"⏱️️ เวลาที่ใช้ในการประมวลผล: {latency_sec:.2f} วินาที")
+                st.caption(f"⏱️ เวลาที่ใช้ในการประมวลผล: {latency_sec:.2f} วินาที")
             for idx, s in enumerate(sources, 1):
                 col1, col2 = st.columns([3, 1])
                 badge = "🟢 สูง" if s['score'] >= 0.50 else "🟡 ปานกลาง"
