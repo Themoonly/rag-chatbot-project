@@ -103,7 +103,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict], api_key: str):
 คำตอบ:"""
 
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1
     )
