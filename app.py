@@ -106,12 +106,12 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     gemini_key = st.secrets.get("GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     groq_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
 
-    # ทางเลือกหลัก: Gemini API
+    # ทางเลือกหลัก: Gemini API (ลองโมเดลที่เป็น active versions)
     if gemini_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            candidate_models = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+            candidate_models = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
             for m in candidate_models:
                 try:
                     response = client.models.generate_content(model=m, contents=prompt)
@@ -127,7 +127,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         try:
             from groq import Groq
             groq_client = Groq(api_key=groq_key)
-            candidate_groq_models = ["llama-3.1-8b-instant", "llama3-8b-8192", "gemma2-9b-it"]
+            candidate_groq_models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]
             for gm in candidate_groq_models:
                 try:
                     res = groq_client.chat.completions.create(
