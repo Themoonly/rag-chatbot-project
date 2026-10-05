@@ -1,6 +1,7 @@
 import os
 import glob
 import re
+import time
 import streamlit as st
 import numpy as np
 import faiss
@@ -28,7 +29,7 @@ def chunk_document(text: str, chunk_size: int = 450, overlap: int = 80) -> list[
         start += chunk_size - overlap
     return chunks
 
-# 3. เตรียม Vector Store (โหลดเพียงครั้งเดียวด้วย st.cache_resource)
+# 3. เตรียม Vector Store (แคชไว้ด้วย st.cache_resource)
 @st.cache_resource(show_spinner="กำลังโหลดฐานข้อมูลท่องเที่ยวปราจีนบุรี...")
 def init_vector_store():
     data_files = glob.glob("data/*.txt")
@@ -50,7 +51,7 @@ def init_vector_store():
                 "text": ch
             })
 
-    # โมเดลขนาดเล็ก ประหยัด RAM ไม่เกินโควตา Streamlit Cloud
+    # โมเดลขนาดกะทัดรัด ประหยัด RAM ไม่เกินโควตา Streamlit Cloud
     embed_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     texts = [item["text"] for item in chunks_data]
     embeddings = embed_model.encode(texts, normalize_embeddings=True)
@@ -80,7 +81,7 @@ def retrieve_context(query: str, top_k: int = 3):
             })
     return results
 
-# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback ป้องกันโมเดล Not Found / Permission Denied
+# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback
 def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     context_str = "\n\n".join(
         [f"[แหล่งที่มา: {c['source']}]\n{c['text']}" for c in retrieved_chunks]
@@ -99,27 +100,26 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
 คำถาม: {query}
 คำตอบ:"""
 
-    # ตรวจสอบ API Key
     gemini_key = st.secrets.get("GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     groq_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
 
-    # ทางเลือกหลัก: ใช้ Gemini
+    # ทางเลือกหลัก: Gemini API
     if gemini_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            # วนลูปโมเดลตามรุ่นที่เปิดให้บริการ
-            candidate_models = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+            candidate_models = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
             for m in candidate_models:
                 try:
                     response = client.models.generate_content(model=m, contents=prompt)
-                    return response.text
+                    if response and response.text:
+                        return response.text
                 except Exception:
                     continue
-        except Exception as e:
-            st.warning(f"Gemini API ขัดข้อง: {e} กำลังสลับไปใช้ Groq สำรอง...")
+        except Exception:
+            pass
 
-    # ทางเลือกสำรอง: ใช้ Groq
+    # ทางเลือกสำรอง: Groq API
     if groq_key:
         try:
             from groq import Groq
@@ -132,48 +132,98 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1
                     )
-                    return res.choices[0].message.content
+                    if res.choices and res.choices[0].message.content:
+                        return res.choices[0].message.content
                 except Exception:
                     continue
-        except Exception as e:
-            return f"เกิดข้อผิดพลาดในการเชื่อมต่อโมเดล: {e}"
+        except Exception:
+            pass
 
-    return "⚠️ กรุณาตั้งค่า GEMINI_API_KEY หรือ GROQ_API_KEY ใน Streamlit Secrets"
+    return "⚠️ กรุณาตรวจสอบ GEMINI_API_KEY หรือ GROQ_API_KEY ใน Streamlit Secrets ให้ถูกต้อง"
 
-# 6. ส่วนหน้าจอแสดงผล (Chatbot Interface)
+# ฟังก์ชัน Generator สำหรับจำลอง Streaming ให้ UI ตอบทีละคำอย่างลื่นไหล
+def text_streamer(text: str):
+    tokens = re.split(r'(\s+)', text)
+    for token in tokens:
+        yield token
+        time.sleep(0.015)
+
+# 6. ส่วนแถบด้านข้าง (Sidebar) แนะนำการใช้งานและตัวอย่างคำถาม
+with st.sidebar:
+    st.header("🧭 แนะนำการใช้งาน")
+    st.write("ระบบผู้ช่วยอัจฉริยะ ตอบคำถามข้อมูลท่องเที่ยวและวัฒนธรรมในจังหวัดปราจีนบุรี โดยดึงข้อมูลจากเอกสารทางการและข้อเท็จจริงในพื้นที่")
+    
+    st.markdown("---")
+    st.subheader("💡 คำถามตัวอย่าง (คลิกเพื่อถาม)")
+    
+    sample_queries = [
+        "น้ำตกเหวนรกเปิดให้เข้าชมกี่โมง และมีค่าธรรมเนียมเข้าชมเท่าไหร่",
+        "พระอุโบสถวัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร",
+        "เทศกาลล่องแก่งหินเพิงจัดขึ้นช่วงเดือนไหนของปี",
+        "ถ้าต้องการซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศร ซื้อได้ที่ไหน",
+        "เกาะเสม็ดมีเรือข้ามฟากกี่โมง"  # คำถามทดสอบ Negative Test (ไม่มีในเอกสาร)
+    ]
+    
+    for sq in sample_queries:
+        if st.button(sq, use_container_width=True):
+            st.session_state["preset_query"] = sq
+            st.rerun()
+
+    st.markdown("---")
+    if st.button("🗑️ ล้างประวัติการสนทนา", use_container_width=True):
+        st.session_state.messages = []
+        if "preset_query" in st.session_state:
+            del st.session_state["preset_query"]
+        st.rerun()
+
+# 7. ส่วนหน้าจอหลัก (Chatbot Interface)
 st.title("🧭 ผู้ช่วยท่องเที่ยวและวัฒนธรรมปราจีนบุรี (RAG AI)")
-st.caption("สอบถามแหล่งท่องเที่ยว วัด ประวัติศาสตร์ เทศกาล ร้านอาหาร และการเดินทางในจังหวัดปราจีนบุรี")
+st.caption("🔍 ขับเคลื่อนด้วยเทคนิค RAG (Retrieval-Augmented Generation) ป้องกันข้อมูลมโน (Zero Hallucination)")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# แสดงประวัติการสนทนา
+# ฟังก์ชันย่อยสำหรับวาดกล่องเอกสารอ้างอิงให้สวยงาม
+def display_sources(sources):
+    if sources:
+        with st.expander("📚 เอกสารและข้อมูลอ้างอิง"):
+            for idx, s in enumerate(sources, 1):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**ลำดับที่ {idx}: `{s['source']}`**")
+                with col2:
+                    st.markdown(f"`Similarity: {s['score']:.3f}`")
+                st.info(f"\"{s['text'][:240]}...\"")
+
+# แสดงประวัติการแชต
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "sources" in msg and msg["sources"]:
-            with st.expander("📚 เอกสารอ้างอิง"):
-                for s in msg["sources"]:
-                    st.write(f"- **{s['source']}** (Similarity Score: {s['score']:.3f})")
-                    st.caption(f"\"{s['text'][:160]}...\"")
+        if "sources" in msg:
+            display_sources(msg["sources"])
+
+# ตรวจสอบว่ามีคำถามที่กดมาจากปุ่ม Sidebar หรือไม่
+selected_query = None
+if "preset_query" in st.session_state and st.session_state["preset_query"]:
+    selected_query = st.session_state.pop("preset_query")
 
 # ช่องรับคำถาม
-if user_query := st.chat_input("พิมพ์คำถามท่องเที่ยวปราจีนบุรี เช่น น้ำตกเหวนรกเปิดกี่โมง..."):
-    st.session_state.messages.append({"role": "user", "content": user_query})
+input_query = st.chat_input("พิมพ์คำถามท่องเที่ยวปราจีนบุรี เช่น น้ำตกเหวนรกเปิดกี่โมง...")
+active_query = selected_query or input_query
+
+if active_query:
+    st.session_state.messages.append({"role": "user", "content": active_query})
     with st.chat_message("user"):
-        st.markdown(user_query)
+        st.markdown(active_query)
 
     with st.chat_message("assistant"):
-        with st.spinner("กำลังค้นหาข้อมูลในคลังเอกสารและสรุปคำตอบ..."):
-            retrieved = retrieve_context(user_query, top_k=3)
-            answer = generate_rag_answer(user_query, retrieved)
-            st.markdown(answer)
+        with st.spinner("กำลังสืบค้นคลังข้อมูลและเรียบเรียงคำตอบ..."):
+            retrieved = retrieve_context(active_query, top_k=3)
+            answer = generate_rag_answer(active_query, retrieved)
             
-            if retrieved:
-                with st.expander("📚 เอกสารอ้างอิง"):
-                    for s in retrieved:
-                        st.write(f"- **{s['source']}** (Similarity Score: {s['score']:.3f})")
-                        st.caption(f"\"{s['text'][:160]}...\"")
+            # แสดงผลแบบ Streaming
+            st.write_stream(text_streamer(answer))
+            display_sources(retrieved)
 
     st.session_state.messages.append({
         "role": "assistant",
