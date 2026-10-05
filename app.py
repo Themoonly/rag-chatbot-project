@@ -103,7 +103,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict], api_key: str):
 คำตอบ:"""
 
     response = client.models.generate_content(
-      model="gemini-2.5-flash",
+      model="gemini-3.8-flash",
       contents=prompt,
     )
     return response.text
