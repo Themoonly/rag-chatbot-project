@@ -5,7 +5,7 @@ import streamlit as st
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
-from groq import Groq
+from google import genai
 
 # 1. ตั้งค่าหน้าเว็บ Streamlit
 st.set_page_config(
@@ -83,8 +83,8 @@ def retrieve_context(query: str, top_k: int = 3):
 
 # 5. ฟังก์ชันสร้างคำตอบด้วย Groq LLM API
 def generate_rag_answer(query: str, retrieved_chunks: list[dict], api_key: str):
-    client = Groq(api_key=api_key)
-    
+    client = genai.Client(api_key=api_key)
+
     context_str = "\n\n".join(
         [f"[แหล่งที่มา: {c['source']}]\n{c['text']}" for c in retrieved_chunks]
     )
@@ -102,19 +102,18 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict], api_key: str):
 คำถาม: {query}
 คำตอบ:"""
 
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
+    response = client.models.generate_content(
+      model="gemini-2.5-flash",
+      contents=prompt,
     )
-    return response.choices[0].message.content
+    return response.text
 
 # 6. ส่วนติดต่อผู้ใช้ (Chatbot UI)
 st.title("🧭 ผู้ช่วยท่องเที่ยวและวัฒนธรรมปราจีนบุรี (RAG AI)")
 st.caption("สอบถามแหล่งท่องเที่ยว วัด ประวัติศาสตร์ เทศกาล ร้านอาหาร และการเดินทางในจังหวัดปราจีนบุรี")
 
 # อ่าน API Key จาก Secrets ของ Streamlit Cloud
-api_key = st.secrets.get("GROQ_API_KEY", "")
+api_key = st.secrets.get("GEMINI_API_KEY", "")
 if not api_key:
     st.error("⚠️ ไม่พบ GROQ_API_KEY ใน Streamlit Secrets กรุณาตั้งค่าก่อนใช้งาน")
     st.stop()
