@@ -5,6 +5,8 @@ import streamlit as st
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
+import time
+from google.genai import errors
 from google import genai
 
 # 1. ตั้งค่าหน้าเว็บ Streamlit
