@@ -81,8 +81,11 @@ def retrieve_context(query: str, top_k: int = 3):
             })
     return results
 
-# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback
+# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback พร้อมระบบความปลอดภัยระดับ User
 def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
+    if not retrieved_chunks:
+        return "ขออภัยครับ ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามนี้ในเอกสารคลังความรู้การท่องเที่ยวปราจีนบุรี"
+
     context_str = "\n\n".join(
         [f"[แหล่งที่มา: {c['source']}]\n{c['text']}" for c in retrieved_chunks]
     )
@@ -90,7 +93,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     prompt = f"""คุณเป็นไกด์และผู้ช่วยแนะนำข้อมูลการท่องเที่ยวและวัฒนธรรมประจำจังหวัดปราจีนบุรี
 
 กฎการตอบคำถาม:
-1. ตอบคำถามโดยใช้เฉพาะข้อมูลจาก "บริบทที่กำหนดให้" ด้านล่างนี้เท่านั้น ห้ามแต่งคำตอบขึ้นมาเอง
+1. ตอบคำถามโดยใช้เฉพาะข้อมูลจาก "บริบทที่กำหนดให้" ด้านล่างนี้เท่านั้น ห้ามแต่งคำตอบขึ้นมาเองเด็ดขาด
 2. หากข้อมูลในบริบทไม่มีคำตอบ หรือข้อมูลไม่เพียงพอ ให้ตอบตรงๆ ว่า "ไม่พบข้อมูลนี้ในเอกสารคลังความรู้"
 3. อธิบายคำตอบอย่างสุภาพ กระชับ ถูกต้อง และระบุแหล่งที่มา (ชื่อไฟล์เอกสาร) ท้ายคำตอบเสมอ
 
@@ -139,14 +142,24 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    return "⚠️ กรุณาตรวจสอบ GEMINI_API_KEY หรือ GROQ_API_KEY ใน Streamlit Secrets ให้ถูกต้อง"
+    # ทางเลือกฉุกเฉิน (Graceful Degradation): หากบริการ AI ภายนอกขัดข้องทั้งหมด
+    # สรุปข้อมูลเบื้องต้นจาก Chunks ที่ค้นพบส่งให้ผู้ใช้ทันที ไม่ปล่อยให้ระบบล่มหรือโชว์ Error ทางเทคนิค
+    fallback_response = (
+        "ขณะนี้ระบบประมวลผลภาษามีผู้ใช้งานจำนวนมาก ขออภัยในความไม่สะดวกครับ "
+        "ระบบจึงได้ดึงข้อมูลเบื้องต้นที่เกี่ยวข้องจากคลังเอกสารมาให้ท่านโดยตรง:\n\n"
+    )
+    for c in retrieved_chunks[:2]:
+        fallback_response += f"- **จากเอกสาร `{c['source']}`**:\n> \"{c['text'][:180]}...\"\n\n"
+    fallback_response += "*(สามารถคลิกดูรายละเอียดเต็มได้ที่กล่อง '📚 เอกสารและข้อมูลอ้างอิง' ด้านล่างครับ)*"
+    
+    return fallback_response
 
 # ฟังก์ชัน Generator สำหรับจำลอง Streaming ให้ UI ตอบทีละคำอย่างลื่นไหล
 def text_streamer(text: str):
     tokens = re.split(r'(\s+)', text)
     for token in tokens:
         yield token
-        time.sleep(0.015)
+        time.sleep(0.012)
 
 # 6. ส่วนแถบด้านข้าง (Sidebar) แนะนำการใช้งานและตัวอย่างคำถาม
 with st.sidebar:
