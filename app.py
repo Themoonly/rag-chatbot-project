@@ -113,12 +113,12 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     gemini_key = st.secrets.get("GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     groq_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
 
-    # ลำดับที่ 1: ลองใช้ Gemini API
+    # ลำดับที่ 1: เรียกใช้ Gemini API (เริ่มจากรุ่นที่รองรับปัจจุบัน)
     if gemini_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
+            candidate_models = ["gemini-3.8-flash", "gemini-3.0-flash", "gemini-2.0-flash"]
             for m in candidate_models:
                 try:
                     response = client.models.generate_content(model=m, contents=prompt)
@@ -129,7 +129,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    # ลำดับที่ 2: ลองใช้ Groq API (Fallback)
+    # ลำดับที่ 2: เรียกใช้ Groq API (Fallback)
     if groq_key:
         try:
             from groq import Groq
@@ -149,7 +149,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    # ลำดับที่ 3: Graceful Degradation (ดึงสรุปเบื้องต้นจาก Chunks)
+    # ลำดับที่ 3: Graceful Degradation (ดึงสรุปเบื้องต้นจาก Chunks แทนการขึ้นจอ Error สีแดง)
     fallback_response = (
         "ขณะนี้ระบบประมวลผลภาษามีผู้ใช้งานหนาแน่นชั่วคราว "
         "ระบบจึงได้ดึงข้อมูลเบื้องต้นที่เกี่ยวข้องจากคลังเอกสารมาให้ท่านโดยตรง:\n\n"
@@ -172,7 +172,7 @@ def display_sources(sources, latency_sec=None):
     if sources:
         with st.expander("📚 เอกสารและข้อมูลอ้างอิง"):
             if latency_sec:
-                st.caption(f"⏱️ เวลาที่ใช้ในการประมวลผล: {latency_sec:.2f} วินาที")
+                st.caption(f"⏱️️ เวลาที่ใช้ในการประมวลผล: {latency_sec:.2f} วินาที")
             for idx, s in enumerate(sources, 1):
                 col1, col2 = st.columns([3, 1])
                 badge = "🟢 สูง" if s['score'] >= 0.50 else "🟡 ปานกลาง"
@@ -182,7 +182,7 @@ def display_sources(sources, latency_sec=None):
                     st.markdown(f"`ความเกี่ยวข้อง: {s['score']:.3f}` ({badge})")
                 st.info(f"\"{s['text'][:240]}...\"")
 
-# 6. แถบด้านข้าง (Sidebar) พร้อมสถิติคลังข้อมูลและหมวดหมู่คำถาม
+# 6. แถบด้านข้าง (Sidebar) พร้อมสถิติคลังข้อมูล รายชื่อไฟล์ และหมวดหมู่คำถามครอบคลุม
 with st.sidebar:
     st.header("🧭 แนะนำการใช้งาน")
     st.write("ผู้ช่วยอัจฉริยะตอบคำถามข้อมูลท่องเที่ยวและวัฒนธรรมในจังหวัดปราจีนบุรี โดยดึงข้อมูลจากเอกสารทางการและข้อเท็จจริงในพื้นที่")
@@ -197,30 +197,79 @@ with st.sidebar:
     m_col2.metric("จำนวน Chunks", f"{total_chunks} ชิ้น")
     st.caption("🛡️ โหมด: ป้องกันข้อมูลมโน (Zero Hallucination)")
 
+    # Dropdown ดูรายชื่อเอกสารทั้งหมดในระบบ
+    with st.expander("📁 ดูรายชื่อเอกสารคลังความรู้ (10 หมวด)"):
+        st.markdown("""
+        - `01_national_parks.txt` (อุทยาน & น้ำตก)
+        - `02_temples_and_faith.txt` (วัดแก้วพิจิตร & โพธิ์ 2,000 ปี)
+        - `03_historical_sites.txt` (พิพิธภัณฑ์ & เมืองศรีมโหสถ)
+        - `04_festivals_and_events.txt` (งานล่องแก่ง & เกษตร)
+        - `05_local_food_and_restaurants.txt` (ร้านอาหาร & ตลาดโต้รุ่ง)
+        - `06_souvenirs_and_otop.txt` (ทุเรียน GI & ยาอภัยภูเบศร)
+        - `07_transportation.txt` (รถไฟ & รถตู้หมอชิต)
+        - `08_accommodations_and_camping.txt` (จุดกางเต็นท์ & รีสอร์ต)
+        - `09_adventure_and_rafting.txt` (กฎล่องแก่ง & คายัค)
+        - `10_emergency_and_visitor_centers.txt` (ตำรวจ & รพ.อภัยภูเบศร)
+        """)
+
     st.markdown("---")
-    st.subheader("💡 คำถามตัวอย่าง")
+    st.subheader("💡 คำถามตัวอย่าง (คลิกเพื่อถาม)")
     
+    # หมวดที่ 1: ธรรมชาติ & อุทยาน
     with st.expander("🌲 ธรรมชาติ & อุทยาน", expanded=True):
         if st.button("น้ำตกเหวนรกเปิดกี่โมง และมีค่าธรรมเนียมเท่าไหร่", use_container_width=True):
             st.session_state["preset_query"] = "น้ำตกเหวนรกเปิดให้เข้าชมกี่โมง และมีค่าธรรมเนียมเข้าชมเท่าไหร่"
             st.rerun()
+        if st.button("ด่านเนินหอมเปิดกี่โมง และมีกฎความปลอดภัยอย่างไร", use_container_width=True):
+            st.session_state["preset_query"] = "ด่านตรวจเนินหอมขึ้นเขาใหญ่เปิดปิดเวลากี่โมง และมีกฎ 4 ม. อะไรบ้าง"
+            st.rerun()
 
+    # หมวดที่ 2: วัฒนธรรม โบราณสถาน และความเชื่อ
     with st.expander("🛕 วัฒนธรรม & โบราณสถาน"):
         if st.button("วัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร", use_container_width=True):
             st.session_state["preset_query"] = "พระอุโบสถวัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร"
             st.rerun()
+        if st.button("ต้นพระศรีมหาโพธิ์มีประวัติและความสำคัญอย่างไร", use_container_width=True):
+            st.session_state["preset_query"] = "ต้นพระศรีมหาโพธิ์ อำเภอศรีมโหสถ มีความเป็นมาอย่างไร และมีอายุประมาณกี่ปี"
+            st.rerun()
+        if st.button("พิพิธภัณฑสถานแห่งชาติ ปราจีนบุรี เปิดวันไหนบ้าง", use_container_width=True):
+            st.session_state["preset_query"] = "พิพิธภัณฑสถานแห่งชาติ ปราจีนบุรี เปิดและปิดทำการวันใดบ้าง และค่าเข้าชมเท่าไหร่"
+            st.rerun()
 
-    with st.expander("🚣 กิจกรรม & ของฝาก"):
+    # หมวดที่ 3: เทศกาล ผจญภัย และกิจกรรม
+    with st.expander("🚣 เทศกาล & กิจกรรมผจญภัย"):
         if st.button("เทศกาลล่องแก่งหินเพิงจัดช่วงไหน", use_container_width=True):
-            st.session_state["preset_query"] = "เทศกาลล่องแก่งหินเพิงจัดขึ้นช่วงเดือนไหนของปี"
+            st.session_state["preset_query"] = "เทศกาลล่องแก่งหินเพิงจัดขึ้นช่วงเดือนไหนของปี และมีความยากระดับใด"
             st.rerun()
-        if st.button("ซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศรได้ที่ไหน", use_container_width=True):
-            st.session_state["preset_query"] = "ถ้าต้องการซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศร ซื้อได้ที่ไหน"
+        if st.button("กฎความปลอดภัยในการล่องแก่งหินเพิงมีอะไรบ้าง", use_container_width=True):
+            st.session_state["preset_query"] = "ในการล่องแก่งหินเพิงมีกฎข้อบังคับและมาตรการความปลอดภัยอย่างไรบ้าง"
             st.rerun()
 
+    # หมวดที่ 4: อาหาร ของฝาก และการเดินทาง
+    with st.expander("🛍️ อาหาร ของฝาก & การเดินทาง"):
+        if st.button("ซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศรได้ที่ไหน", use_container_width=True):
+            st.session_state["preset_query"] = "ถ้าต้องการซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศร ซื้อได้ที่ไหนและเปิดทำการกี่โมง"
+            st.rerun()
+        if st.button("ทุเรียนปราจีนบุรี GI มีสายพันธุ์เด่นอะไรบ้าง", use_container_width=True):
+            st.session_state["preset_query"] = "ทุเรียนปราจีนบุรีที่ได้รับการขึ้นทะเบียนสิ่งบ่งชี้ทางภูมิศาสตร์ (GI) มีสายพันธุ์เด่นอะไรบ้าง และรสชาติเป็นอย่างไร"
+            st.rerun()
+        if st.button("นั่งรถไฟจากหัวลำโพงมาปราจีนบุรี ค่าตั๋วกี่บาท", use_container_width=True):
+            st.session_state["preset_query"] = "การเดินทางด้วยรถไฟจากสถานีกรุงเทพ (หัวลำโพง) มายังปราจีนบุรี มีค่าโดยสารชั้น 3 ประมาณกี่บาท"
+            st.rerun()
+
+    # หมวดที่ 5: เหตุฉุกเฉินและจุดช่วยเหลือ
+    with st.expander("🚨 เบอร์ฉุกเฉิน & โรงพยาบาล"):
+        if st.button("เบอร์ติดต่อตำรวจท่องเที่ยวและโรงพยาบาลหลัก", use_container_width=True):
+            st.session_state["preset_query"] = "หากประสบเหตุด่วนระหว่างท่องเที่ยวในปราจีนบุรี ติดต่อตำรวจท่องเที่ยวและโรงพยาบาลเจ้าพระยาอภัยภูเบศรได้ที่เบอร์ใด"
+            st.rerun()
+
+    # หมวดที่ 6: คำถามทดสอบ Negative Test (นอกพื้นที่)
     with st.expander("❌ ทดสอบคำถามนอกพื้นที่ (Negative Test)"):
         if st.button("เกาะเสม็ดมีเรือข้ามฟากกี่โมง", use_container_width=True):
             st.session_state["preset_query"] = "เกาะเสม็ดมีเรือข้ามฟากกี่โมง"
+            st.rerun()
+        if st.button("สวนสัตว์ซาฟารีเวิลด์มีโชว์โลมากี่โมง", use_container_width=True):
+            st.session_state["preset_query"] = "สวนสัตว์ซาฟารีเวิลด์มีโชว์โลมากี่โมง และค่าบัตรเข้าชมผู้ใหญ่ราคาเท่าไหร่"
             st.rerun()
 
     st.markdown("---")
