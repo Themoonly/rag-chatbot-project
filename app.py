@@ -7,12 +7,20 @@ import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer
 
-# 1. ตั้งค่าหน้าเว็บ
+# 1. ตั้งค่าหน้าเว็บและสไตล์ CSS
 st.set_page_config(
     page_title="Prachinburi Travel Guide (RAG)",
     page_icon="🧭",
     layout="wide"
 )
+
+st.markdown("""
+<style>
+    .stChatMessage { border-radius: 12px; margin-bottom: 8px; }
+    .stButton>button { border-radius: 8px; font-weight: 500; }
+    .metric-card { background-color: #f8f9fa; border-radius: 8px; padding: 10px; border-left: 4px solid #00a86b; }
+</style>
+""", unsafe_allow_html=True)
 
 # 2. ฟังก์ชันทำความสะอาดและแบ่ง Chunk
 def clean_text(text: str) -> str:
@@ -51,7 +59,6 @@ def init_vector_store():
                 "text": ch
             })
 
-    # โมเดลขนาดกะทัดรัด ประหยัด RAM ไม่เกินโควตา Streamlit Cloud
     embed_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
     texts = [item["text"] for item in chunks_data]
     embeddings = embed_model.encode(texts, normalize_embeddings=True)
@@ -81,7 +88,7 @@ def retrieve_context(query: str, top_k: int = 3):
             })
     return results
 
-# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback พร้อมระบบความปลอดภัยระดับ User
+# 5. ฟังก์ชันสร้างคำตอบแบบ Auto-Fallback พร้อมความปลอดภัย
 def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     if not retrieved_chunks:
         return "ขออภัยครับ ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามนี้ในเอกสารคลังความรู้การท่องเที่ยวปราจีนบุรี"
@@ -106,12 +113,12 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
     gemini_key = st.secrets.get("GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     groq_key = st.secrets.get("GROQ_API_KEY", "") or os.getenv("GROQ_API_KEY", "")
 
-    # ทางเลือกหลัก: Gemini API (ลองโมเดลที่เป็น active versions)
+    # ลำดับที่ 1: ลองใช้ Gemini API
     if gemini_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            candidate_models = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"]
             for m in candidate_models:
                 try:
                     response = client.models.generate_content(model=m, contents=prompt)
@@ -122,7 +129,7 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    # ทางเลือกสำรอง: Groq API
+    # ลำดับที่ 2: ลองใช้ Groq API (Fallback)
     if groq_key:
         try:
             from groq import Groq
@@ -142,44 +149,78 @@ def generate_rag_answer(query: str, retrieved_chunks: list[dict]):
         except Exception:
             pass
 
-    # ทางเลือกฉุกเฉิน (Graceful Degradation): หากบริการ AI ภายนอกขัดข้องทั้งหมด
-    # สรุปข้อมูลเบื้องต้นจาก Chunks ที่ค้นพบส่งให้ผู้ใช้ทันที ไม่ปล่อยให้ระบบล่มหรือโชว์ Error ทางเทคนิค
+    # ลำดับที่ 3: Graceful Degradation (ดึงสรุปเบื้องต้นจาก Chunks)
     fallback_response = (
-        "ขณะนี้ระบบประมวลผลภาษามีผู้ใช้งานจำนวนมาก ขออภัยในความไม่สะดวกครับ "
+        "ขณะนี้ระบบประมวลผลภาษามีผู้ใช้งานหนาแน่นชั่วคราว "
         "ระบบจึงได้ดึงข้อมูลเบื้องต้นที่เกี่ยวข้องจากคลังเอกสารมาให้ท่านโดยตรง:\n\n"
     )
     for c in retrieved_chunks[:2]:
         fallback_response += f"- **จากเอกสาร `{c['source']}`**:\n> \"{c['text'][:180]}...\"\n\n"
-    fallback_response += "*(สามารถคลิกดูรายละเอียดเต็มได้ที่กล่อง '📚 เอกสารและข้อมูลอ้างอิง' ด้านล่างครับ)*"
+    fallback_response += "*(ท่านสามารถคลิกดูรายละเอียดเต็มได้ที่กล่อง '📚 เอกสารและข้อมูลอ้างอิง' ด้านล่างครับ)*"
     
     return fallback_response
 
-# ฟังก์ชัน Generator สำหรับจำลอง Streaming ให้ UI ตอบทีละคำอย่างลื่นไหล
+# ฟังก์ชัน Generator สำหรับจำลอง Streaming ข้อความ
 def text_streamer(text: str):
     tokens = re.split(r'(\s+)', text)
     for token in tokens:
         yield token
         time.sleep(0.012)
 
-# 6. ส่วนแถบด้านข้าง (Sidebar) แนะนำการใช้งานและตัวอย่างคำถาม
+# ฟังก์ชันแสดงผลกล่องเอกสารอ้างอิง
+def display_sources(sources, latency_sec=None):
+    if sources:
+        with st.expander("📚 เอกสารและข้อมูลอ้างอิง"):
+            if latency_sec:
+                st.caption(f"⏱️ เวลาที่ใช้ในการประมวลผล: {latency_sec:.2f} วินาที")
+            for idx, s in enumerate(sources, 1):
+                col1, col2 = st.columns([3, 1])
+                badge = "🟢 สูง" if s['score'] >= 0.50 else "🟡 ปานกลาง"
+                with col1:
+                    st.markdown(f"**ลำดับที่ {idx}: `{s['source']}`**")
+                with col2:
+                    st.markdown(f"`ความเกี่ยวข้อง: {s['score']:.3f}` ({badge})")
+                st.info(f"\"{s['text'][:240]}...\"")
+
+# 6. แถบด้านข้าง (Sidebar) พร้อมสถิติคลังข้อมูลและหมวดหมู่คำถาม
 with st.sidebar:
     st.header("🧭 แนะนำการใช้งาน")
-    st.write("ระบบผู้ช่วยอัจฉริยะ ตอบคำถามข้อมูลท่องเที่ยวและวัฒนธรรมในจังหวัดปราจีนบุรี โดยดึงข้อมูลจากเอกสารทางการและข้อเท็จจริงในพื้นที่")
-    
+    st.write("ผู้ช่วยอัจฉริยะตอบคำถามข้อมูลท่องเที่ยวและวัฒนธรรมในจังหวัดปราจีนบุรี โดยดึงข้อมูลจากเอกสารทางการและข้อเท็จจริงในพื้นที่")
+
+    # สถิติคลังข้อมูล (Knowledge Base Metrics)
     st.markdown("---")
-    st.subheader("💡 คำถามตัวอย่าง (คลิกเพื่อถาม)")
+    st.subheader("📊 ข้อมูลคลังความรู้")
+    total_docs = len(glob.glob("data/*.txt"))
+    total_chunks = len(chunks_data) if chunks_data else 0
+    m_col1, m_col2 = st.columns(2)
+    m_col1.metric("หมวดเอกสาร", f"{total_docs} ไฟล์")
+    m_col2.metric("จำนวน Chunks", f"{total_chunks} ชิ้น")
+    st.caption("🛡️ โหมด: ป้องกันข้อมูลมโน (Zero Hallucination)")
+
+    st.markdown("---")
+    st.subheader("💡 คำถามตัวอย่าง")
     
-    sample_queries = [
-        "น้ำตกเหวนรกเปิดให้เข้าชมกี่โมง และมีค่าธรรมเนียมเข้าชมเท่าไหร่",
-        "พระอุโบสถวัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร",
-        "เทศกาลล่องแก่งหินเพิงจัดขึ้นช่วงเดือนไหนของปี",
-        "ถ้าต้องการซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศร ซื้อได้ที่ไหน",
-        "เกาะเสม็ดมีเรือข้ามฟากกี่โมง"  # คำถามทดสอบ Negative Test (ไม่มีในเอกสาร)
-    ]
-    
-    for sq in sample_queries:
-        if st.button(sq, use_container_width=True):
-            st.session_state["preset_query"] = sq
+    with st.expander("🌲 ธรรมชาติ & อุทยาน", expanded=True):
+        if st.button("น้ำตกเหวนรกเปิดกี่โมง และมีค่าธรรมเนียมเท่าไหร่", use_container_width=True):
+            st.session_state["preset_query"] = "น้ำตกเหวนรกเปิดให้เข้าชมกี่โมง และมีค่าธรรมเนียมเข้าชมเท่าไหร่"
+            st.rerun()
+
+    with st.expander("🛕 วัฒนธรรม & โบราณสถาน"):
+        if st.button("วัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร", use_container_width=True):
+            st.session_state["preset_query"] = "พระอุโบสถวัดแก้วพิจิตรมีความพิเศษทางสถาปัตยกรรมอย่างไร"
+            st.rerun()
+
+    with st.expander("🚣 กิจกรรม & ของฝาก"):
+        if st.button("เทศกาลล่องแก่งหินเพิงจัดช่วงไหน", use_container_width=True):
+            st.session_state["preset_query"] = "เทศกาลล่องแก่งหินเพิงจัดขึ้นช่วงเดือนไหนของปี"
+            st.rerun()
+        if st.button("ซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศรได้ที่ไหน", use_container_width=True):
+            st.session_state["preset_query"] = "ถ้าต้องการซื้อผลิตภัณฑ์สมุนไพรอภัยภูเบศร ซื้อได้ที่ไหน"
+            st.rerun()
+
+    with st.expander("❌ ทดสอบคำถามนอกพื้นที่ (Negative Test)"):
+        if st.button("เกาะเสม็ดมีเรือข้ามฟากกี่โมง", use_container_width=True):
+            st.session_state["preset_query"] = "เกาะเสม็ดมีเรือข้ามฟากกี่โมง"
             st.rerun()
 
     st.markdown("---")
@@ -196,31 +237,18 @@ st.caption("🔍 ขับเคลื่อนด้วยเทคนิค RA
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ฟังก์ชันย่อยสำหรับวาดกล่องเอกสารอ้างอิงให้สวยงาม
-def display_sources(sources):
-    if sources:
-        with st.expander("📚 เอกสารและข้อมูลอ้างอิง"):
-            for idx, s in enumerate(sources, 1):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"**ลำดับที่ {idx}: `{s['source']}`**")
-                with col2:
-                    st.markdown(f"`Similarity: {s['score']:.3f}`")
-                st.info(f"\"{s['text'][:240]}...\"")
-
 # แสดงประวัติการแชต
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if "sources" in msg:
-            display_sources(msg["sources"])
+            display_sources(msg["sources"], msg.get("latency"))
 
-# ตรวจสอบว่ามีคำถามที่กดมาจากปุ่ม Sidebar หรือไม่
+# รับคำถามจากปุ่ม Sidebar หรือช่อง Input
 selected_query = None
 if "preset_query" in st.session_state and st.session_state["preset_query"]:
     selected_query = st.session_state.pop("preset_query")
 
-# ช่องรับคำถาม
 input_query = st.chat_input("พิมพ์คำถามท่องเที่ยวปราจีนบุรี เช่น น้ำตกเหวนรกเปิดกี่โมง...")
 active_query = selected_query or input_query
 
@@ -230,16 +258,19 @@ if active_query:
         st.markdown(active_query)
 
     with st.chat_message("assistant"):
+        start_time = time.time()
         with st.spinner("กำลังสืบค้นคลังข้อมูลและเรียบเรียงคำตอบ..."):
             retrieved = retrieve_context(active_query, top_k=3)
             answer = generate_rag_answer(active_query, retrieved)
+            latency = time.time() - start_time
             
-            # แสดงผลแบบ Streaming
+            # ตอบแบบ Streaming
             st.write_stream(text_streamer(answer))
-            display_sources(retrieved)
+            display_sources(retrieved, latency)
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
-        "sources": retrieved
+        "sources": retrieved,
+        "latency": latency
     })
